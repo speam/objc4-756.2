@@ -499,6 +499,7 @@ static void addClassTableEntry(Class cls, bool addMeta = true) {
 
     // This class is allowed to be a known class via the shared cache or via
     // data segments, but it is not allowed to be in the dynamic table already.
+    // 当前类已经初始化，所以要添加到allocatedClasses哈希表【已开辟类的表】
     assert(!NXHashMember(allocatedClasses, cls));
 
     if (!isKnownClass(cls))
@@ -841,7 +842,9 @@ static void methodizeClass(Class cls)
         _objc_inform("CLASS: methodizing class '%s' %s", 
                      cls->nameForLogging(), isMeta ? "(meta)" : "");
     }
-
+    
+    // 从ro中读取方法列表（包括分类中的方法）、属性列表、协议列表赋值给rw
+    
     // Install methods and properties that the class implements itself.
     method_list_t *list = ro->baseMethods();
     if (list) {
@@ -868,6 +871,7 @@ static void methodizeClass(Class cls)
 
     // Attach categories.
     category_list *cats = unattachedCategoriesForClass(cls, true /*realizing*/);
+    // 是把拿到的分类列表进行处理，最终的处理也是将信息通过attachLists()函数处理来赋值类的rw的信息
     attachCategories(cls, cats, false /*don't flush caches*/);
 
     if (PrintConnecting) {
@@ -1161,6 +1165,7 @@ static void addNamedClass(Class cls, const char *name, Class replacing = nil)
         // secondary meta->nonmeta table.
         addNonMetaClass(cls);
     } else {
+        // 将当前类添加到已创建好的gdb_objc_realized_classes哈希表（存放所有类【总表】）
         NXMapInsert(gdb_objc_realized_classes, name, cls);
     }
     assert(!(cls->data()->flags & RO_META));
@@ -1919,6 +1924,7 @@ static Class realizeClassWithoutSwift(Class cls)
     Class metacls;
     bool isMeta;
 
+    // 这里可以通过判断父类是否为空将递归结束
     if (!cls) return nil;
     if (cls->isRealized()) return cls;
     assert(cls == remapClass(cls));
@@ -1932,13 +1938,16 @@ static Class realizeClassWithoutSwift(Class cls)
         ro = cls->data()->ro;
         cls->changeInfo(RW_REALIZED|RW_REALIZING, RW_FUTURE);
     } else {
+        // 一般走这里
         // Normal class. Allocate writeable class data.
-        rw = (class_rw_t *)calloc(sizeof(class_rw_t), 1);
-        rw->ro = ro;
-        rw->flags = RW_REALIZED|RW_REALIZING;
-        cls->setData(rw);
+        rw = (class_rw_t *)calloc(sizeof(class_rw_t), 1);   // 给rw申请内存
+        rw->ro = ro;                                        // 设置rw的ro
+        rw->flags = RW_REALIZED|RW_REALIZING;               // 设置flags
+        cls->setData(rw);                                   // 给cls设置正确的rw
     }
 
+    // 初始化 rw 的其他字段，更新superclass、meta class
+    
     isMeta = ro->flags & RO_META;
 
     rw->version = isMeta ? 7 : 0;  // old runtime went up to 6
@@ -1963,7 +1972,10 @@ static Class realizeClassWithoutSwift(Class cls)
     //   or that Swift's initializers have already been called.
     //   fixme that assumption will be wrong if we add support
     //   for ObjC subclasses of Swift classes.
+    
+    // 递归父类的信息初始化，出口是父类为nil
     supercls = realizeClassWithoutSwift(remapClass(cls->superclass));
+    // 递归元类的信息初始化，出口是元类的元类为自己
     metacls = realizeClassWithoutSwift(remapClass(cls->ISA()));
 
 #if SUPPORT_NONPOINTER_ISA
@@ -2029,6 +2041,7 @@ static Class realizeClassWithoutSwift(Class cls)
     }
 
     // Connect this class to its superclass's subclass lists
+    // 成员双向绑定父类，子类
     if (supercls) {
         addSubclass(supercls, cls);
     } else {
@@ -2181,13 +2194,13 @@ realizeClassMaybeSwiftMaybeRelock(Class cls, mutex_t& lock, bool leaveLocked)
     if (!cls->isSwiftStable_ButAllowLegacyForNow()) {
         // Non-Swift class. Realize it now with the lock still held.
         // fixme wrong in the future for objc subclasses of swift classes
-        realizeClassWithoutSwift(cls);
+        realizeClassWithoutSwift(cls);  // 非swift类
         if (!leaveLocked) lock.unlock();
     } else {
         // Swift class. We need to drop locks and call the Swift
         // runtime to initialize it.
         lock.unlock();
-        cls = realizeSwiftClass(cls);
+        cls = realizeSwiftClass(cls);   // swift类
         assert(cls->isRealized());    // callback must have provoked realization
         if (leaveLocked) lock.lock();
     }
@@ -2250,7 +2263,7 @@ static void realizeAllClassesInImage(header_info *hi)
     classlist = _getObjc2ClassList(hi, &count);
 
     for (i = 0; i < count; i++) {
-        Class cls = remapClass(classlist[i]);
+        Class cls = remapClass(classlist[i]);   // 重新映射类
         if (cls) {
             realizeClassMaybeSwiftAndLeaveLocked(cls, runtimeLock);
         }
@@ -2528,6 +2541,7 @@ Class readClass(Class cls, bool headerIsBundle, bool headerIsPreoptimized)
 {
     const char *mangledName = cls->mangledName();
     
+    // 如果当前类的父类中有丢失的weak-linked类，则返回nil
     if (missingWeakSuperclass(cls)) {
         // No superclass (probably weak-linked). 
         // Disavow any knowledge of this subclass.
@@ -2560,7 +2574,7 @@ Class readClass(Class cls, bool headerIsBundle, bool headerIsPreoptimized)
     cls->fixupBackwardDeployingStableSwift();
 
     Class replacing = nil;
-    if (Class newCls = popFutureNamedClass(mangledName)) {
+    if (Class newCls = popFutureNamedClass(mangledName)) {  // 一般不会走进来，这是专门针对未来的待处理的类的特殊操作，因此也不会对ro、rw进行操作（可打断点调试，创建类和系统类都不会进入）
         // This name was previously allocated as a future class.
         // Copy objc_class to future class's struct.
         // Preserve future's rw data block.
@@ -2590,7 +2604,7 @@ Class readClass(Class cls, bool headerIsBundle, bool headerIsPreoptimized)
         // fixme strict assert doesn't work because of duplicates
         // assert(cls == getClass(name));
         assert(getClassExceptSomeSwift(mangledName));
-    } else {
+    } else {    // 走这里
         addNamedClass(cls, mangledName, replacing);
         addClassTableEntry(cls);
     }
@@ -2722,6 +2736,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
     hIndex < hCount && (hi = hList[hIndex]); \
     hIndex++
 
+    // 主要功能1⃣️：创建两个表
     if (!doneOnce) {
         doneOnce = YES;
 
@@ -2775,10 +2790,12 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
 #endif
 
+        // 条件允许的时候，禁用taggedPointers
         if (DisableTaggedPointers) {
-            disableTaggedPointers();
+            disableTaggedPoint ts.log("IMAGE TIMES: first time tasks");ers();
         }
         
+        // 初始化taggedPointer
         initializeTaggedPointerObfuscator();
 
         if (PrintConnecting) {
@@ -2788,11 +2805,14 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
         // namedClasses
         // Preoptimized classes don't go in this table.
         // 4/3 is NXMapTable's load factor
+        // 通过doneOnce一次创建两张表：gdb_objc_realized_classes、allocatedClasses
         int namedClassesSize = 
             (isPreoptimized() ? unoptimizedTotalClasses : totalClasses) * 4 / 3;
+        // 通过NX技术创建mapTable，这张表里面包含的所有类的信息，我们称之为`总表`
         gdb_objc_realized_classes =
             NXCreateMapTable(NXStrValueMapPrototype, namedClassesSize);
         
+        // 通过NX技术创建HashTable，这张表只包含已经开辟的类的信息，我们称之为`已开辟类的表`
         allocatedClasses = NXCreateHashTable(NXPtrPrototype, 0, nil);
         
         ts.log("IMAGE TIMES: first time tasks");
@@ -2800,8 +2820,9 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
 
     // Discover classes. Fix up unresolved future classes. Mark bundle classes.
-
+    // 主要功能2⃣️：类的重映射
     for (EACH_HEADER) {
+        // 从编译后的 类列表 中取出所有类，获取到的是一个classref_t类型的指针
         classref_t *classlist = _getObjc2ClassList(hi, &count);
         
         if (! mustReadClasses(hi)) {
@@ -2813,13 +2834,18 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
         bool headerIsPreoptimized = hi->isPreoptimized();
 
         for (i = 0; i < count; i++) {
+            // 数组中会取出OS_dispatch_queue_concurrent、OS_xpc_object、NSRunloop等系统类，例如CF、Fundation、libdispatch中的类，以及自己创建的类
             Class cls = (Class)classlist[i];
+            
+            // 通过readClass函数获取处理后的新类
             Class newCls = readClass(cls, headerIsBundle, headerIsPreoptimized);
 
+            // 初始化所有懒加载的类需要的内存空间 - 现在数据没有加载到的 - 连类都没有初始化的
             if (newCls != cls  &&  newCls) {
                 // Class was moved but not deleted. Currently this occurs 
                 // only when the new class resolved a future class.
                 // Non-lazily realize the class below.
+                // 将懒加载的类添加到数组中
                 resolvedFutureClasses = (Class *)
                     realloc(resolvedFutureClasses, 
                             (resolvedFutureClassCount+1) * sizeof(Class));
@@ -2833,16 +2859,21 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
     // Fix up remapped classes
     // Class list and nonlazy class list remain unremapped.
     // Class refs and super refs are remapped for message dispatching.
-    
+    // 主要功能3⃣️：修复重映射
+    // 将未映射Class和Super Class重映射，被重映射的类都是非懒加载的类
     if (!noClassesRemapped()) {
         for (EACH_HEADER) {
+            // 调用_getObjc2ClassRefs获取类的引用
             Class *classrefs = _getObjc2ClassRefs(hi, &count);
             for (i = 0; i < count; i++) {
+                // 通过remapClassRef进行重映射
                 remapClassRef(&classrefs[i]);
             }
             // fixme why doesn't test future1 catch the absence of this?
+            // 调用_getObjc2SuperRefs获取父类的引用
             classrefs = _getObjc2SuperRefs(hi, &count);
             for (i = 0; i < count; i++) {
+                // 通过remapClassRef进行重映射
                 remapClassRef(&classrefs[i]);
             }
         }
@@ -2850,6 +2881,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
     ts.log("IMAGE TIMES: remap classes");
 
+    // 主要功能4⃣️：添加SEL到namedSelectors表。将所有SEL都注册到哈希表中，是另外一张哈希表
     // Fix up @selector references
     static size_t UnfixedSelectors;
     {
@@ -2858,8 +2890,10 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
             if (hi->isPreoptimized()) continue;
             
             bool isBundle = hi->isBundle();
+            // 通过_getObjc2SelectorRefs拿到MachO中的静态段__objc_selrefs
             SEL *sels = _getObjc2SelectorRefs(hi, &count);
             UnfixedSelectors += count;
+            // 遍历列表调用sel_registerNameNoLock将SEL添加到namedSelectors哈希表
             for (i = 0; i < count; i++) {
                 const char *name = sel_cname(sels[i]);
                 sels[i] = sel_registerNameNoLock(name, isBundle);
@@ -2871,6 +2905,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
 #if SUPPORT_FIXUP
     // Fix up old objc_msgSend_fixup call sites
+    // 主要功能5⃣️：修复旧的函数指针调用遗留
     for (EACH_HEADER) {
         message_ref_t *refs = _getObjc2MessageRefs(hi, &count);
         if (count == 0) continue;
@@ -2880,6 +2915,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
                          "call sites in %s", count, hi->fname());
         }
         for (i = 0; i < count; i++) {
+            // 内部将常用的alloc、objc_msgSend等函数指针进行注册，并fix为新的函数指针
             fixupMessageRef(refs+i);
         }
     }
@@ -2888,14 +2924,18 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 #endif
 
     // Discover protocols. Fix up protocol refs.
+    // 主要功能6⃣️：添加Protocol到协议表。 遍历所有协议列表，并且将协议列表加载到Protocol的哈希表中
     for (EACH_HEADER) {
         extern objc_class OBJC_CLASS_$_Protocol;
+        // cls = Protocol类，所有协议和对象的结构体都类似，isa都对应Protocol类
         Class cls = (Class)&OBJC_CLASS_$_Protocol;
         assert(cls);
+        // 获取protocol哈希表
         NXMapTable *protocol_map = protocols();
         bool isPreoptimized = hi->isPreoptimized();
         bool isBundle = hi->isBundle();
 
+        // 从编译器中读取并初始化Protocol
         protocol_t **protolist = _getObjc2ProtocolList(hi, &count);
         for (i = 0; i < count; i++) {
             readProtocol(protolist[i], cls, protocol_map, 
@@ -2908,17 +2948,21 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
     // Fix up @protocol references
     // Preoptimized images may have the right 
     // answer already but we don't know for sure.
+    // 主要功能7⃣️：修复协议列表引用，优化后的images可能是正确的，但是并不确定
     for (EACH_HEADER) {
         protocol_t **protolist = _getObjc2ProtocolRefs(hi, &count);
         for (i = 0; i < count; i++) {
+            // 遍历remapProtocolRef修复协议
             remapProtocolRef(&protolist[i]);
         }
     }
 
     ts.log("IMAGE TIMES: fix up @protocol references");
 
+    // 主要功能8⃣️：实现非懒加载的类
     // Realize non-lazy classes (for +load methods and static instances)
     for (EACH_HEADER) {
+        // 获取到__objc_nlclslist，取出非懒加载类
         classref_t *classlist = 
             _getObjc2NonlazyClassList(hi, &count);
         for (i = 0; i < count; i++) {
@@ -2940,7 +2984,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
                 cls->ISA()->cache._occupied = 0;
             }
 #endif
-            
+            // 再加载一遍——如果已添加就不会添加进去，确保整个结构都被添加
             addClassTableEntry(cls);
 
             if (cls->isSwiftStable()) {
@@ -2953,6 +2997,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
                 // We can't disallow all Swift classes because of
                 // classes like Swift.__EmptyArrayStorage
             }
+            // 实现所有非懒加载的类(实例化类对象的一些信息，例如rw)
             realizeClassWithoutSwift(cls);
         }
     }
@@ -2974,6 +3019,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
     ts.log("IMAGE TIMES: realize future classes");
 
+    // 主要功能🔟：发现和处理所有Category
     // Discover categories. 
     for (EACH_HEADER) {
         category_t **catlist = 
@@ -3039,6 +3085,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
     // +load handled by prepare_load_methods()
 
+    // 主要功能十一：实现所有的类
     if (DebugNonFragileIvars) {
         realizeAllClasses();
     }

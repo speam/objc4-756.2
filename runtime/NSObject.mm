@@ -1954,8 +1954,8 @@ objc_objectptr_t objc_unretainedPointer(id object) { return object; }
 
 void arr_init(void) 
 {
-    AutoreleasePoolPage::init();
-    SideTableInit();
+    AutoreleasePoolPage::init();    // 初始化自动释放池
+    SideTableInit();                // 初始化SideTable
 }
 
 

@@ -442,7 +442,7 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
 {
     static bool firstTime = YES;
     header_info *hList[mhCount];
-    uint32_t hCount;
+    uint32_t hCount;    // 镜像文件的个数
     size_t selrefCount = 0;
 
     // Perform first-time initialization if necessary.
@@ -478,8 +478,10 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
                 // Size some data structures based on main executable's size
 #if __OBJC2__
                 size_t count;
+                // 从mach_o读取__objc_selrefs段的信息
                 _getObjc2SelectorRefs(hi, &count);
                 selrefCount += count;
+                // 从mach_o读取__objc_msgrefs段的信息。
                 _getObjc2MessageRefs(hi, &count);
                 selrefCount += count;
 #else
@@ -574,6 +576,7 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
     }
 
     if (hCount > 0) {
+        // 调用_read_images来加载镜像文件
         _read_images(hList, hCount, totalClasses, unoptimizedTotalClasses);
     }
 
@@ -879,7 +882,7 @@ void _objc_init(void)
     initialized = true;
     
     // fixme defer initialization until an objc-using image is found?
-    environ_init();
+    environ_init();     // 初始化环境变量
     tls_init();
     static_init();
     lock_init();

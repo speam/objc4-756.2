@@ -447,6 +447,7 @@ void _objc_pthread_destroyspecific(void *arg)
 
 void tls_init(void)
 {
+    // 初始化关于线程key的绑定，比如线程的析构函数
 #if SUPPORT_DIRECT_THREAD_KEYS
     _objc_pthread_key = TLS_DIRECT_KEY;
     pthread_key_init_np(TLS_DIRECT_KEY, &_objc_pthread_destroyspecific);

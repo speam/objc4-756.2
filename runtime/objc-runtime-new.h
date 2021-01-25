@@ -769,28 +769,30 @@ class list_array_tt {
     void attachLists(List* const * addedLists, uint32_t addedCount) {
         if (addedCount == 0) return;
 
-        if (hasArray()) {
+        if (hasArray()) {   // 多对多处理
             // many lists -> many lists
             uint32_t oldCount = array()->count;
             uint32_t newCount = oldCount + addedCount;
             setArray((array_t *)realloc(array(), array_t::byteSize(newCount)));
-            array()->count = newCount;
+            array()->count = newCount;  // 扩容
+            // 将需要增加的addedLists放在扩容之后的内存的前面
             memmove(array()->lists + addedCount, array()->lists, 
                     oldCount * sizeof(array()->lists[0]));
             memcpy(array()->lists, addedLists, 
                    addedCount * sizeof(array()->lists[0]));
         }
-        else if (!list  &&  addedCount == 1) {
+        else if (!list  &&  addedCount == 1) {  // 0对1处理
             // 0 lists -> 1 list
-            list = addedLists[0];
+            list = addedLists[0];   // 一步直接的赋值
         } 
-        else {
+        else {  // 1对多处理
             // 1 list -> many lists
             List* oldList = list;
             uint32_t oldCount = oldList ? 1 : 0;
             uint32_t newCount = oldCount + addedCount;
             setArray((array_t *)malloc(array_t::byteSize(newCount)));
-            array()->count = newCount;
+            array()->count = newCount;  // 扩容
+            // 将需要增加的数据放在前面
             if (oldList) array()->lists[addedCount] = oldList;
             memcpy(array()->lists, addedLists, 
                    addedCount * sizeof(array()->lists[0]));
