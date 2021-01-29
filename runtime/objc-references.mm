@@ -223,17 +223,23 @@ id _object_get_associative_reference(id object, void *key) {
     id value = nil;
     uintptr_t policy = OBJC_ASSOCIATION_ASSIGN;
     {
+        // 关联对象的管理类
         AssociationsManager manager;
         AssociationsHashMap &associations(manager.associations());
+        // 生成伪装地址。处理参数 object 地址
         disguised_ptr_t disguised_object = DISGUISE(object);
+        // 所有对象的额迭代器
         AssociationsHashMap::iterator i = associations.find(disguised_object);
-        if (i != associations.end()) {
+        if (i != associations.end()) {  // 还没到最后就找到了
             ObjectAssociationMap *refs = i->second;
+            // 内部对象的迭代器
             ObjectAssociationMap::iterator j = refs->find(key);
             if (j != refs->end()) {
+                // 找到 - 把值和策略读取出来
                 ObjcAssociation &entry = j->second;
                 value = entry.value();
                 policy = entry.policy();
+                // 如果策略是 OBJC_ASSOCIATION_GETTER_RETAIN - 就会持有一下
                 if (policy & OBJC_ASSOCIATION_GETTER_RETAIN) {
                     objc_retain(value);
                 }
@@ -280,27 +286,38 @@ void _object_set_associative_reference(id object, void *key, id value, uintptr_t
         _objc_fatal("objc_setAssociatedObject called on instance (%p) of class %s which does not allow associated objects", object, object_getClassName(object));
     
     // retain the new value (if any) outside the lock.
+    // 初始化一个 ObjcAssociation 对象，用于持有原有的关联对象
     ObjcAssociation old_association(0, nil);
+    // 判断传入的关联对象值是否存在
     id new_value = value ? acquireValue(value, policy) : nil;
     {
+        // 关联对象的管理类
         AssociationsManager manager;
+        // 获取关联的 HashMap -> 存储当前关联对象
         AssociationsHashMap &associations(manager.associations());
+        // 对当前对象的地址做按位取反操作 - 就是 HashMap 的key (哈希函数)
         disguised_ptr_t disguised_object = DISGUISE(object);
         if (new_value) {
             // break any existing association.
+            // 获取 AssociationsHashMap 的迭代器 - (对象的) 进行遍历
             AssociationsHashMap::iterator i = associations.find(disguised_object);
             if (i != associations.end()) {
                 // secondary table exists
                 ObjectAssociationMap *refs = i->second;
+                // 根据key去获取关联属性的迭代器
                 ObjectAssociationMap::iterator j = refs->find(key);
                 if (j != refs->end()) {
                     old_association = j->second;
+                    // 替换设置新值
                     j->second = ObjcAssociation(policy, new_value);
                 } else {
+                    // 到最后了——直接设置新值
                     (*refs)[key] = ObjcAssociation(policy, new_value);
                 }
             } else {
                 // create the new association (first time).
+                // 如果AssocistionsHashMap没有对象的关联信息表
+                // 那么就创建一个map并通过传入的key把value存进去
                 ObjectAssociationMap *refs = new ObjectAssociationMap;
                 associations[disguised_object] = refs;
                 (*refs)[key] = ObjcAssociation(policy, new_value);
@@ -308,6 +325,8 @@ void _object_set_associative_reference(id object, void *key, id value, uintptr_t
             }
         } else {
             // setting the association to nil breaks the association.
+            // 如果传入的value是nil，并且之前使用相同的key存储过关联对象，
+            // 那么就把这个关联的value移除（这也是为什么传入nil对象能够把对象的关联value移除）
             AssociationsHashMap::iterator i = associations.find(disguised_object);
             if (i !=  associations.end()) {
                 ObjectAssociationMap *refs = i->second;
@@ -320,18 +339,23 @@ void _object_set_associative_reference(id object, void *key, id value, uintptr_t
         }
     }
     // release the old value (outside of the lock).
+    // 最后把之前使用传入的这个key存储的关联的value释放（OBJC_ASSOCIATION_SETTER_RETAIN策略存储的）
     if (old_association.hasValue()) ReleaseValue()(old_association);
 }
 
 void _object_remove_assocations(id object) {
     vector< ObjcAssociation,ObjcAllocator<ObjcAssociation> > elements;
     {
+        // 关联对象的管理类
         AssociationsManager manager;
+        // 获取关联的 HashMap -> 存储当前关联对象
         AssociationsHashMap &associations(manager.associations());
         if (associations.size() == 0) return;
+        // 对当前对象的地址做按位取反操作
         disguised_ptr_t disguised_object = DISGUISE(object);
+        // 获取 AssociationsHashMap 的迭代器 - (对象的) 进行遍历
         AssociationsHashMap::iterator i = associations.find(disguised_object);
-        if (i != associations.end()) {
+        if (i != associations.end()) {  // 还没到最后找到了
             // copy all of the associations that need to be removed.
             ObjectAssociationMap *refs = i->second;
             for (ObjectAssociationMap::iterator j = refs->begin(), end = refs->end(); j != end; ++j) {

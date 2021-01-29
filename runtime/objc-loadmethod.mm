@@ -81,6 +81,7 @@ void add_class_to_loadable_list(Class cls)
                               sizeof(struct loadable_class));
     }
     
+    // loadable_classes 是一个结构体，里面有类和方法实现
     loadable_classes[loadable_classes_used].cls = cls;
     loadable_classes[loadable_classes_used].method = method;
     loadable_classes_used++;
@@ -345,20 +346,24 @@ void call_load_methods(void)
     if (loading) return;
     loading = YES;
 
+    // 压栈一个自动释放池
     void *pool = objc_autoreleasePoolPush();
 
     do {
         // 1. Repeatedly call class +loads until there aren't any more
+        // 循环调用类的`+load`方法直到找不到为止
         while (loadable_classes_used > 0) {
             call_class_loads();
         }
 
         // 2. Call category +loads ONCE
+        // 调用一次分类中的`+load`方法
         more_categories = call_category_loads();
 
         // 3. Run more +loads if there are classes OR more untried categories
     } while (loadable_classes_used > 0  ||  more_categories);
 
+    // 出栈一个自动释放池
     objc_autoreleasePoolPop(pool);
 
     loading = NO;

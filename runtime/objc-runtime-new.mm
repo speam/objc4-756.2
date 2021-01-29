@@ -871,7 +871,6 @@ static void methodizeClass(Class cls)
 
     // Attach categories.
     category_list *cats = unattachedCategoriesForClass(cls, true /*realizing*/);
-    // 是把拿到的分类列表进行处理，最终的处理也是将信息通过attachLists()函数处理来赋值类的rw的信息
     attachCategories(cls, cats, false /*don't flush caches*/);
 
     if (PrintConnecting) {
@@ -1937,8 +1936,7 @@ static Class realizeClassWithoutSwift(Class cls)
         rw = cls->data();
         ro = cls->data()->ro;
         cls->changeInfo(RW_REALIZED|RW_REALIZING, RW_FUTURE);
-    } else {
-        // 一般走这里
+    } else { // 一般走这里
         // Normal class. Allocate writeable class data.
         rw = (class_rw_t *)calloc(sizeof(class_rw_t), 1);   // 给rw申请内存
         rw->ro = ro;                                        // 设置rw的ro
@@ -2439,10 +2437,12 @@ load_images(const char *path __unused, const struct mach_header *mh)
     // Discover load methods
     {
         mutex_locker_t lock2(runtimeLock);
+        // 发现并准备 +load 方法
         prepare_load_methods((const headerType *)mh);
     }
 
     // Call +load methods (without runtimeLock - re-entrant)
+    // 唤醒 +load 方法
     call_load_methods();
 }
 
@@ -2736,7 +2736,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
     hIndex < hCount && (hi = hList[hIndex]); \
     hIndex++
 
-    // 主要功能1⃣️：创建两个表
+    // 主要功能1⃣️：创建两个表，加载所有类到类的`gdb_objc_realized_classes`表中
     if (!doneOnce) {
         doneOnce = YES;
 
@@ -2820,7 +2820,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
 
     // Discover classes. Fix up unresolved future classes. Mark bundle classes.
-    // 主要功能2⃣️：类的重映射
+    // 主要功能2⃣️：对所有类做重映射
     for (EACH_HEADER) {
         // 从编译后的 类列表 中取出所有类，获取到的是一个classref_t类型的指针
         classref_t *classlist = _getObjc2ClassList(hi, &count);
@@ -2924,7 +2924,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 #endif
 
     // Discover protocols. Fix up protocol refs.
-    // 主要功能6⃣️：添加Protocol到协议表。 遍历所有协议列表，并且将协议列表加载到Protocol的哈希表中
+    // 主要功能6⃣️：将所有`Protocol`都添加到`protocol_map`表中
     for (EACH_HEADER) {
         extern objc_class OBJC_CLASS_$_Protocol;
         // cls = Protocol类，所有协议和对象的结构体都类似，isa都对应Protocol类
@@ -2948,7 +2948,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
     // Fix up @protocol references
     // Preoptimized images may have the right 
     // answer already but we don't know for sure.
-    // 主要功能7⃣️：修复协议列表引用，优化后的images可能是正确的，但是并不确定
+    // 主要功能7⃣️：对所有`Protocol`做重映射
     for (EACH_HEADER) {
         protocol_t **protolist = _getObjc2ProtocolRefs(hi, &count);
         for (i = 0; i < count; i++) {
@@ -2959,7 +2959,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
     ts.log("IMAGE TIMES: fix up @protocol references");
 
-    // 主要功能8⃣️：实现非懒加载的类
+    // 主要功能8⃣️：初始化所有非懒加载的类，进行`rw、ro`等操作
     // Realize non-lazy classes (for +load methods and static instances)
     for (EACH_HEADER) {
         // 获取到__objc_nlclslist，取出非懒加载类
@@ -2967,6 +2967,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
             _getObjc2NonlazyClassList(hi, &count);
         for (i = 0; i < count; i++) {
             Class cls = remapClass(classlist[i]);
+            printf("_getObjc2NonlazyClassList Class:%s\n",cls->mangledName());
             if (!cls) continue;
 
             // hack for class __ARCLite__, which didn't get this above
@@ -3001,7 +3002,11 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
             realizeClassWithoutSwift(cls);
         }
     }
+    
+    // 懒加载的类通过消息发送进行加载
 
+    
+    
     ts.log("IMAGE TIMES: realize non-lazy classes");
 
     // Realize newly-resolved future classes, in case CF manipulates them
@@ -3019,7 +3024,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
     ts.log("IMAGE TIMES: realize future classes");
 
-    // 主要功能🔟：发现和处理所有Category
+    // 主要功能9⃣️：处理所有的`Categories`，包括`Class`和`Metal Class`
     // Discover categories. 
     for (EACH_HEADER) {
         category_t **catlist = 
@@ -3085,7 +3090,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
     // +load handled by prepare_load_methods()
 
-    // 主要功能十一：实现所有的类
+    // 主要功能🔟：初始化所有未初始化的类
     if (DebugNonFragileIvars) {
         realizeAllClasses();
     }
@@ -3169,8 +3174,10 @@ static void schedule_class_load(Class cls)
     if (cls->data()->flags & RW_LOADED) return;
 
     // Ensure superclass-first ordering
+    // 递归调用遍历父类的`+load`方法，确保父类的`+load`方法顺序排在子类的前面
     schedule_class_load(cls->superclass);
 
+    // 把类的`+load`方法存在`loadable_classes`里面
     add_class_to_loadable_list(cls);
     cls->setInfo(RW_LOADED); 
 }
@@ -3190,13 +3197,18 @@ void prepare_load_methods(const headerType *mhdr)
 
     runtimeLock.assertLocked();
 
+    // 获取`非懒加载类`列表
     classref_t *classlist = 
         _getObjc2NonlazyClassList(mhdr, &count);
     for (i = 0; i < count; i++) {
+        // 把类的`+load`方法存在`loadable_classes`里面
         schedule_class_load(remapClass(classlist[i]));
     }
 
+    // map_images完毕了
+    // 获取到所有的`非懒加载分类`列表
     category_t **categorylist = _getObjc2NonlazyCategoryList(mhdr, &count);
+    // 然后遍历这些非懒加载分类，然后去加载这些分类所依赖的类
     for (i = 0; i < count; i++) {
         category_t *cat = categorylist[i];
         Class cls = remapClass(cat->cls);
@@ -3205,8 +3217,10 @@ void prepare_load_methods(const headerType *mhdr)
             _objc_fatal("Swift class extensions and categories on Swift "
                         "classes are not allowed to have +load methods");
         }
+        // 防止类没有初始化（若已经初始化了则不影响）
         realizeClassWithoutSwift(cls);
         assert(cls->ISA()->isRealized());
+        // 把分类中的`+load`方法存到`loadable_categories`
         add_category_to_loadable_list(cat);
     }
 }
@@ -5370,6 +5384,7 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
     }
 
     if (initialize && !cls->isInitialized()) {
+        // 调用类中的 initialize 方法
         cls = initializeAndLeaveLocked(cls, inst, runtimeLock);
         // runtimeLock may have been dropped but is now locked again
 

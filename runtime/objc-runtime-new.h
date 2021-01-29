@@ -1194,10 +1194,10 @@ struct objc_class : objc_object {   // 类有4个成员变量：1.isa，2.superc
     Class superclass;  // 当前类的父类 8字节
     cache_t cache;     // formerly cache pointer and vtable 用于缓存已调用的方法，加速方法的调用 16字节
     class_data_bits_t bits;    // class_rw_t * plus custom rr/alloc flags  用于存储类的数据（类的方法、属性、遵循的协议等信息）  8字节
-
     class_rw_t *data() { 
         return bits.data();
     }
+    
     void setData(class_rw_t *newData) {
         bits.setData(newData);
     }
@@ -1503,14 +1503,14 @@ struct swift_class_t : objc_class {
 
 
 struct category_t {
-    const char *name;
-    classref_t cls;
-    struct method_list_t *instanceMethods;
-    struct method_list_t *classMethods;
-    struct protocol_list_t *protocols;
-    struct property_list_t *instanceProperties;
+    const char *name; // 是分类所关联的类，也就是类的名字
+    classref_t cls; // 这里其实就是我们要扩展的类对象，只是在编译期这个值并不存在
+    struct method_list_t *instanceMethods; // 分类上存储的实例方法
+    struct method_list_t *classMethods; // 分类上存储的类方法
+    struct protocol_list_t *protocols; // 分类所实现的协议
+    struct property_list_t *instanceProperties; // 分类所定义的实例属性，不过我们一般在分类中添加属性都是通过关联对象来实现的
     // Fields below this point are not always present on disk.
-    struct property_list_t *_classProperties;
+    struct property_list_t *_classProperties; // 分类所定义的类属性
 
     method_list_t *methodsForMeta(bool isMeta) {
         if (isMeta) return classMethods;

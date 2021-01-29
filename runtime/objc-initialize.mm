@@ -490,6 +490,7 @@ void initializeNonMetaClass(Class cls)
 
     // Make sure super is done initializing BEFORE beginning to initialize cls.
     // See note about deadlock above.
+    // 递归调用父类的`initialize`
     supercls = cls->superclass;
     if (supercls  &&  !supercls->isInitialized()) {
         initializeNonMetaClass(supercls);
@@ -534,6 +535,7 @@ void initializeNonMetaClass(Class cls)
         @try
 #endif
         {
+            // ✅看这里
             callInitialize(cls);
 
             if (PrintInitializing) {

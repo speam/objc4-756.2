@@ -883,7 +883,7 @@ void _objc_init(void)
     
     // fixme defer initialization until an objc-using image is found?
     environ_init();     // 初始化环境变量
-    tls_init();
+    tls_init();         // 关于线程key的绑定
     static_init();
     lock_init();
     exception_init();
